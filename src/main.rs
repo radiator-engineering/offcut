@@ -1,0 +1,304 @@
+mod decide;
+mod gather;
+mod manifest;
+
+use clap::{Parser, Subcommand};
+use decide::{Verdict, decide};
+use serde::Serialize;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::{Command, ExitCode};
+
+#[derive(Parser)]
+#[command(
+    version,
+    about = "Find and safely remove the worktrees and caches that agents and builds leave behind"
+)]
+struct Cli {
+    #[command(subcommand)]
+    cmd: Option<Cmd>,
+    #[command(flatten)]
+    scan: Scan,
+}
+
+#[derive(clap::Args, Clone)]
+struct Scan {
+    /// Folder to search for git repos (repeatable). Default: ~/Development.
+    #[arg(long = "root", global = true)]
+    roots: Vec<PathBuf>,
+    /// Remove a clean, pushed, unmerged worktree once it has been idle this many days.
+    #[arg(long, default_value_t = 30, global = true)]
+    max_age: u64,
+    /// Print JSON instead of a table.
+    #[arg(long, global = true)]
+    json: bool,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+    /// List worktrees and what offcut would do with each. Deletes nothing. The default.
+    Report,
+    /// Remove the worktrees the report marks `remove`.
+    Apply {
+        /// Do not ask for confirmation.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Put back worktrees that `apply` removed. With no path, list what can be restored.
+    Restore {
+        /// Worktree paths to restore.
+        paths: Vec<PathBuf>,
+    },
+}
+
+#[derive(Serialize)]
+struct Row {
+    path: String,
+    repo: String,
+    branch: Option<String>,
+    #[serde(skip)]
+    head: Option<String>,
+    size_bytes: u64,
+    #[serde(flatten)]
+    verdict: Verdict,
+}
+
+fn gib(b: u64) -> String {
+    format!("{:.1} GB", b as f64 / 1e9)
+}
+
+fn rows(scan: &Scan) -> Vec<Row> {
+    let roots = if scan.roots.is_empty() {
+        vec![home().join("Development")]
+    } else {
+        scan.roots.clone()
+    };
+    let repos: Vec<PathBuf> = roots
+        .iter()
+        .flat_map(|r| gather::find_repos(r, 2))
+        .collect();
+    let open = gather::open_paths();
+    gather::gather(&repos, &open)
+        .into_iter()
+        .map(|w| Row {
+            verdict: decide(&w.facts, scan.max_age),
+            path: w.path.display().to_string(),
+            repo: w.repo.display().to_string(),
+            branch: w.branch,
+            head: w.head,
+            size_bytes: w.size_bytes,
+        })
+        .collect()
+}
+
+pub(crate) fn home() -> PathBuf {
+    std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from)
+}
+
+fn reclaimable(rows: &[Row]) -> u64 {
+    rows.iter()
+        .filter(|r| r.verdict.removable())
+        .map(|r| r.size_bytes)
+        .sum()
+}
+
+fn print_report(rows: &[Row], json: bool) {
+    if json {
+        let total = reclaimable(rows);
+        let v = serde_json::json!({ "reclaimable_bytes": total, "worktrees": rows });
+        println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+        return;
+    }
+    for r in rows {
+        let (tag, why) = match &r.verdict {
+            Verdict::Remove(w) => ("remove", w),
+            Verdict::Keep(w) => ("keep  ", w),
+        };
+        println!("{tag}  {:>9}  {}  ({why})", gib(r.size_bytes), r.path);
+    }
+    let n = rows.iter().filter(|r| r.verdict.removable()).count();
+    println!(
+        "\n{n} of {} worktrees removable, {} reclaimable",
+        rows.len(),
+        gib(reclaimable(rows))
+    );
+}
+
+fn apply(rows: &[Row], yes: bool) -> ExitCode {
+    let todo: Vec<&Row> = rows.iter().filter(|r| r.verdict.removable()).collect();
+    if todo.is_empty() {
+        println!("nothing to remove");
+        return ExitCode::SUCCESS;
+    }
+    for r in &todo {
+        println!("remove  {:>9}  {}", gib(r.size_bytes), r.path);
+    }
+    println!("\n{} worktrees, {}", todo.len(), gib(reclaimable(rows)));
+    if !yes {
+        print!("Remove these? [y/N] ");
+        let _ = std::io::stdout().flush();
+        let mut a = String::new();
+        if std::io::stdin().read_line(&mut a).is_err() || !a.trim().eq_ignore_ascii_case("y") {
+            println!("cancelled");
+            return ExitCode::FAILURE;
+        }
+    }
+    let mut failed = 0;
+    for r in todo {
+        // Record first, so every removal can be undone with `offcut restore`.
+        let Some(head) = r.head.clone() else {
+            failed += 1;
+            eprintln!(
+                "skipped {}: HEAD unknown, so it could not be restored",
+                r.path
+            );
+            continue;
+        };
+        let entry = manifest::Entry {
+            ts: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs()),
+            repo: r.repo.clone(),
+            path: r.path.clone(),
+            branch: r.branch.clone(),
+            head,
+            size_bytes: r.size_bytes,
+        };
+        if let Err(e) = manifest::append(&entry) {
+            eprintln!("stopped: cannot write {}: {e}", manifest::file().display());
+            return ExitCode::FAILURE;
+        }
+        // Never --force: git refuses if the worktree changed since the report.
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(&r.repo)
+            .args(["worktree", "remove", &r.path])
+            .output();
+        match out {
+            Ok(o) if o.status.success() => println!("removed {}", r.path),
+            Ok(o) => {
+                failed += 1;
+                eprintln!(
+                    "failed  {}: {}",
+                    r.path,
+                    String::from_utf8_lossy(&o.stderr).trim()
+                );
+            }
+            Err(e) => {
+                failed += 1;
+                eprintln!("failed  {}: {e}", r.path);
+            }
+        }
+    }
+    if failed == 0 {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+fn branch_free(repo: &Path, branch: &str) -> bool {
+    let exists = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args([
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ])
+        .output()
+        .is_ok_and(|o| o.status.success());
+    let used = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["worktree", "list", "--porcelain"])
+        .output()
+        .is_ok_and(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .any(|l| l == format!("branch refs/heads/{branch}"))
+        });
+    exists && !used
+}
+
+fn restore(paths: &[PathBuf]) -> ExitCode {
+    let entries = manifest::read();
+    if paths.is_empty() {
+        let mut seen = Vec::new();
+        for e in entries.iter().rev() {
+            if seen.contains(&e.path) {
+                continue;
+            }
+            seen.push(e.path.clone());
+            let state = if Path::new(&e.path).exists() {
+                "present "
+            } else {
+                "removed "
+            };
+            let at = e
+                .branch
+                .as_deref()
+                .unwrap_or(&e.head[..e.head.len().min(10)]);
+            println!("{state} {}  [{at}]", e.path);
+        }
+        if seen.is_empty() {
+            println!("nothing recorded in {}", manifest::file().display());
+        }
+        return ExitCode::SUCCESS;
+    }
+    let mut failed = 0;
+    for p in paths {
+        let want = std::path::absolute(p).unwrap_or_else(|_| p.clone());
+        let Some(e) = entries.iter().rev().find(|e| Path::new(&e.path) == want) else {
+            failed += 1;
+            eprintln!("no record of {}", want.display());
+            continue;
+        };
+        if want.exists() {
+            println!("present {}", e.path);
+            continue;
+        }
+        let repo = Path::new(&e.repo);
+        let mut cmd = Command::new("git");
+        cmd.arg("-C").arg(repo).args(["worktree", "add"]);
+        // Back on its branch when the branch is still there and free;
+        // otherwise detached at the commit it had.
+        match e.branch.as_deref().filter(|b| branch_free(repo, b)) {
+            Some(b) => cmd.arg(&e.path).arg(b),
+            None => cmd.arg("--detach").arg(&e.path).arg(&e.head),
+        };
+        match cmd.output() {
+            Ok(o) if o.status.success() => println!("restored {}", e.path),
+            Ok(o) => {
+                failed += 1;
+                eprintln!(
+                    "failed  {}: {}",
+                    e.path,
+                    String::from_utf8_lossy(&o.stderr).trim()
+                );
+            }
+            Err(err) => {
+                failed += 1;
+                eprintln!("failed  {}: {err}", e.path);
+            }
+        }
+    }
+    if failed == 0 {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+fn main() -> ExitCode {
+    let cli = Cli::parse();
+    match cli.cmd.unwrap_or(Cmd::Report) {
+        Cmd::Report => {
+            print_report(&rows(&cli.scan), cli.scan.json);
+            ExitCode::SUCCESS
+        }
+        Cmd::Apply { yes } => apply(&rows(&cli.scan), yes),
+        Cmd::Restore { paths } => restore(&paths),
+    }
+}

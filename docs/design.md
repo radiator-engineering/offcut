@@ -28,10 +28,17 @@ folders held about 154 GB across six repos. Bazel's output base held about
 ```
 offcut report [--root <dir>]... [--json]    # default command; deletes nothing
 offcut apply  [--root <dir>]... [--only worktrees|caches] [--yes]
-offcut config                               # print the effective config
+offcut restore [<path>]...                  # undo removals; no path lists them
+offcut config                               # print the effective config (not built yet)
 ```
 
 `apply` prints the plan and asks for confirmation unless `--yes` is given.
+
+Every removal is undoable. Before git removes a worktree, `apply` appends its
+repo, path, branch and commit to `~/.local/state/offcut/removed.jsonl`. If
+that write fails, `apply` stops. `restore` re-adds the worktree on its branch,
+or detached at the recorded commit when the branch is gone or in use. Files
+git ignores (build output, dependencies, `.env`) do not come back.
 
 ## Candidates
 
@@ -56,13 +63,22 @@ A worktree is never removed if any of these is true:
 5. A provider says `hold`.
 
 A worktree is removed only when it is clean and its branch is merged into the
-default branch, or it is clean, pushed, and older than `max_age` (default 14
-days, by last commit and last file change).
+default branch, or it is clean, pushed, and older than `max_age` (default 30
+days, by the newest of the last commit, the index and the folder).
 
 Removal uses `git worktree remove`, then deletes the branch only if it is
 merged. It never uses `--force`.
 
 Caches are removed only when no process has a file open inside them.
+
+### Why idle is not the same as finished
+
+On 2026-09-30 a hand-run version of these rules removed 84 clean, pushed
+worktrees. Some were in use: an idle worktree the owner planned to return to
+looks the same as a finished one. Nothing committed was lost, but ignored
+files were. That is why the default wait is 30 days, why every removal is
+recorded for `restore`, and why a provider's `done` is the only fast path
+other than a merged branch.
 
 ## Provider protocol
 
