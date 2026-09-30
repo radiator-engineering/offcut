@@ -137,7 +137,7 @@ pub fn open_paths() -> Vec<String> {
         .collect()
 }
 
-fn in_use(path: &Path, open: &[String]) -> bool {
+pub fn in_use(path: &Path, open: &[String]) -> bool {
     let p = path.to_string_lossy();
     open.iter().any(|o| {
         o == p.as_ref()
@@ -163,7 +163,7 @@ pub fn du_bytes(path: &Path) -> u64 {
         .map_or(0, |k| k * 1024)
 }
 
-fn now() -> u64 {
+pub fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())

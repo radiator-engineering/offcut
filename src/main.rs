@@ -1,3 +1,4 @@
+mod cache;
 mod decide;
 mod gather;
 mod manifest;
@@ -33,6 +34,9 @@ struct Scan {
     /// Remove a clean, pushed, unmerged worktree once it has been idle this many days.
     #[arg(long, default_value_t = 30, global = true)]
     max_age: u64,
+    /// Also look at build caches (Bazel output bases). Implied by --all.
+    #[arg(long, global = true)]
+    caches: bool,
     /// Measure every worktree, not only the removable ones. Slower: `du` on big trees.
     #[arg(long, global = true)]
     sizes: bool,
@@ -58,8 +62,16 @@ enum Cmd {
     },
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum Kind {
+    Worktree,
+    Cache,
+}
+
 #[derive(Serialize)]
 struct Row {
+    kind: Kind,
     path: String,
     repo: String,
     branch: Option<String>,
@@ -126,6 +138,7 @@ fn rows(scan: &Scan, repos: &[PathBuf]) -> Vec<Row> {
         .into_iter()
         .zip(verdicts)
         .map(|(w, verdict)| Row {
+            kind: Kind::Worktree,
             verdict,
             path: w.path.display().to_string(),
             repo: w.repo.display().to_string(),
@@ -137,12 +150,42 @@ fn rows(scan: &Scan, repos: &[PathBuf]) -> Vec<Row> {
     for (&i, size) in measure.iter().zip(sizes) {
         rows[i].size_bytes = size;
     }
+    if scan.caches || scan.all {
+        rows.extend(cache_rows(scan, &open));
+    }
     rows.sort_by(|a, b| {
         b.verdict
             .removable()
             .cmp(&a.verdict.removable())
             .then(b.size_bytes.cmp(&a.size_bytes))
     });
+    rows
+}
+
+fn cache_rows(scan: &Scan, open: &[String]) -> Vec<Row> {
+    let mut rows = Vec::new();
+    for c in cache::discover() {
+        let verdict = cache::decide(
+            gather::in_use(&c.path, open),
+            cache::idle_secs(&c.path),
+            c.max_age_days,
+        );
+        // `du` on a build cache can take minutes, so measure only what goes.
+        let size_bytes = if scan.sizes || verdict.removable() {
+            gather::du_bytes(&c.path)
+        } else {
+            0
+        };
+        rows.push(Row {
+            kind: Kind::Cache,
+            path: c.path.display().to_string(),
+            repo: String::new(),
+            branch: None,
+            head: None,
+            size_bytes,
+            verdict,
+        });
+    }
     rows
 }
 
@@ -160,7 +203,7 @@ fn reclaimable(rows: &[Row]) -> u64 {
 fn print_report(rows: &[Row], json: bool) {
     if json {
         let total = reclaimable(rows);
-        let v = serde_json::json!({ "reclaimable_bytes": total, "worktrees": rows });
+        let v = serde_json::json!({ "reclaimable_bytes": total, "items": rows });
         println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
         return;
     }
@@ -173,7 +216,7 @@ fn print_report(rows: &[Row], json: bool) {
     }
     let n = rows.iter().filter(|r| r.verdict.removable()).count();
     println!(
-        "\n{n} of {} worktrees removable, {} reclaimable",
+        "\n{n} of {} items removable, {} reclaimable",
         rows.len(),
         gib(reclaimable(rows))
     );
@@ -188,7 +231,7 @@ fn apply(rows: &[Row], yes: bool) -> ExitCode {
     for r in &todo {
         println!("remove  {:>9}  {}", gib(r.size_bytes), r.path);
     }
-    println!("\n{} worktrees, {}", todo.len(), gib(reclaimable(rows)));
+    println!("\n{} items, {}", todo.len(), gib(reclaimable(rows)));
     if !yes {
         print!("Remove these? [y/N] ");
         let _ = std::io::stdout().flush();
@@ -200,6 +243,16 @@ fn apply(rows: &[Row], yes: bool) -> ExitCode {
     }
     let mut failed = 0;
     for r in todo {
+        if r.kind == Kind::Cache {
+            match cache::remove(Path::new(&r.path)) {
+                Ok(()) => println!("removed {}", r.path),
+                Err(e) => {
+                    failed += 1;
+                    eprintln!("failed  {}: {e}", r.path);
+                }
+            }
+            continue;
+        }
         // Record first, so every removal can be undone with `offcut restore`.
         let Some(head) = r.head.clone() else {
             failed += 1;
@@ -354,6 +407,8 @@ fn main() -> ExitCode {
     }
     let repos = match repos(&cli.scan) {
         Ok(r) => r,
+        // Caches are machine-wide, so `--caches` works outside a repo.
+        Err(_) if cli.scan.caches => Vec::new(),
         Err(e) => {
             eprintln!("offcut: {e}");
             return ExitCode::FAILURE;
