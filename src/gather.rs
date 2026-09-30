@@ -259,7 +259,6 @@ pub fn gather(repos: &[PathBuf], open: &[String]) -> Vec<Worktree> {
 }
 
 /// Apply provider hints by path.
-#[allow(dead_code)] // used once providers land
 pub fn apply_hints(wts: &mut [Worktree], hints: &HashMap<PathBuf, Hint>) {
     for w in wts {
         if let Some(h) = hints.get(&w.path) {

@@ -1,6 +1,7 @@
 mod decide;
 mod gather;
 mod manifest;
+mod provider;
 
 use clap::{Parser, Subcommand};
 use decide::{Verdict, decide};
@@ -99,7 +100,18 @@ fn repos(scan: &Scan) -> Result<Vec<PathBuf>, String> {
 
 fn rows(scan: &Scan, repos: &[PathBuf]) -> Vec<Row> {
     let open = gather::open_paths();
-    let found = gather::gather(repos, &open);
+    let mut found = gather::gather(repos, &open);
+    for repo in repos {
+        let paths: Vec<PathBuf> = found
+            .iter()
+            .filter(|w| w.repo == *repo)
+            .map(|w| w.path.clone())
+            .collect();
+        if !paths.is_empty() {
+            let hints = provider::hints(repo, &paths);
+            gather::apply_hints(&mut found, &hints);
+        }
+    }
     let verdicts: Vec<Verdict> = found
         .iter()
         .map(|w| decide(&w.facts, scan.max_age))
