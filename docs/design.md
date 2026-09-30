@@ -26,11 +26,20 @@ folders held about 154 GB across six repos. Bazel's output base held about
 ## Commands
 
 ```
-offcut report [--root <dir>]... [--json]    # default command; deletes nothing
+offcut report [--root <dir>]... [--all] [--sizes] [--json]   # default; deletes nothing
 offcut apply  [--root <dir>]... [--only worktrees|caches] [--yes]
 offcut restore [<path>]...                  # undo removals; no path lists them
 offcut config                               # print the effective config (not built yet)
 ```
+
+**Scope.** With no flag, `offcut` works on the repo you are in, found through
+its git dir, so it also works from inside a linked worktree. `git worktree
+list` then finds that repo's worktrees wherever they live. `--root <dir>`
+scans the repos under a folder. `--all` scans `~/Development`. Outside a repo
+with no flag, it says so and does nothing.
+
+Sizes come from `du`, the slowest step, so `report` measures only removable
+worktrees unless `--sizes` is given.
 
 `apply` prints the plan and asks for confirmation unless `--yes` is given.
 

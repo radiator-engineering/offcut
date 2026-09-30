@@ -13,7 +13,6 @@ pub struct Worktree {
     pub branch: Option<String>,
     /// Commit checked out, so a removal can be undone.
     pub head: Option<String>,
-    pub size_bytes: u64,
     pub facts: Facts,
 }
 
@@ -27,6 +26,18 @@ fn git(dir: &Path, args: &[&str]) -> Option<String> {
     out.status
         .success()
         .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// The main repo of the current folder, even when run from a linked worktree.
+pub fn current_repo() -> Option<PathBuf> {
+    let cwd = std::env::current_dir().ok()?;
+    let common = git(
+        &cwd,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )?;
+    let common = PathBuf::from(common.trim());
+    // `<repo>/.git` for a normal repo. A bare repo has no working folder to scan.
+    (common.file_name()? == ".git").then(|| common.parent().map(Path::to_path_buf))?
 }
 
 /// Repositories under `root`: directories holding a `.git` directory, at most
@@ -135,7 +146,9 @@ fn in_use(path: &Path, open: &[String]) -> bool {
     })
 }
 
-fn du_bytes(path: &Path) -> u64 {
+/// Disk use of one folder, from `du`. Slow on big trees, so callers ask only
+/// for the folders they need.
+pub fn du_bytes(path: &Path) -> u64 {
     Command::new("du")
         .arg("-sk")
         .arg(path)
@@ -234,7 +247,6 @@ pub fn gather(repos: &[PathBuf], open: &[String]) -> Vec<Worktree> {
                         path: l.path.clone(),
                         branch: l.branch.clone(),
                         head: git(&l.path, &["rev-parse", "HEAD"]).map(|h| h.trim().to_string()),
-                        size_bytes: du_bytes(&l.path),
                         facts: facts_for(l, repo, d.as_deref(), open),
                     })
                 })
@@ -243,7 +255,6 @@ pub fn gather(repos: &[PathBuf], open: &[String]) -> Vec<Worktree> {
         });
         out.extend(done);
     }
-    out.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
     out
 }
 
@@ -255,4 +266,17 @@ pub fn apply_hints(wts: &mut [Worktree], hints: &HashMap<PathBuf, Hint>) {
             w.facts.hint = Some(*h);
         }
     }
+}
+
+/// Measure many folders at once, eight at a time.
+pub fn du_many(paths: &[PathBuf]) -> Vec<u64> {
+    let mut out = Vec::with_capacity(paths.len());
+    for chunk in paths.chunks(8) {
+        let done: Vec<u64> = std::thread::scope(|s| {
+            let hs: Vec<_> = chunk.iter().map(|p| s.spawn(move || du_bytes(p))).collect();
+            hs.into_iter().map(|h| h.join().unwrap_or(0)).collect()
+        });
+        out.extend(done);
+    }
+    out
 }

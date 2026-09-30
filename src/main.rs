@@ -23,12 +23,18 @@ struct Cli {
 
 #[derive(clap::Args, Clone)]
 struct Scan {
-    /// Folder to search for git repos (repeatable). Default: ~/Development.
+    /// Search this folder for git repos (repeatable). Default: only the repo you are in.
     #[arg(long = "root", global = true)]
     roots: Vec<PathBuf>,
+    /// Search all of ~/Development instead of one repo.
+    #[arg(long, global = true, conflicts_with = "roots")]
+    all: bool,
     /// Remove a clean, pushed, unmerged worktree once it has been idle this many days.
     #[arg(long, default_value_t = 30, global = true)]
     max_age: u64,
+    /// Measure every worktree, not only the removable ones. Slower: `du` on big trees.
+    #[arg(long, global = true)]
+    sizes: bool,
     /// Print JSON instead of a table.
     #[arg(long, global = true)]
     json: bool,
@@ -64,31 +70,68 @@ struct Row {
 }
 
 fn gib(b: u64) -> String {
+    if b == 0 {
+        return "-".into();
+    }
     format!("{:.1} GB", b as f64 / 1e9)
 }
 
-fn rows(scan: &Scan) -> Vec<Row> {
-    let roots = if scan.roots.is_empty() {
+/// The repos to scan: the one containing the current folder (found through
+/// its git dir, so it works from inside a linked worktree too), or whatever
+/// `--root` / `--all` names. `git worktree list` then finds that repo's
+/// worktrees wherever they live.
+fn repos(scan: &Scan) -> Result<Vec<PathBuf>, String> {
+    let roots = if scan.all {
         vec![home().join("Development")]
     } else {
         scan.roots.clone()
     };
-    let repos: Vec<PathBuf> = roots
-        .iter()
-        .flat_map(|r| gather::find_repos(r, 2))
-        .collect();
+    if !roots.is_empty() {
+        return Ok(roots
+            .iter()
+            .flat_map(|r| gather::find_repos(r, 2))
+            .collect());
+    }
+    gather::current_repo().map(|r| vec![r]).ok_or_else(|| {
+        "not inside a git repo: run it in one, or pass --root <dir> or --all".to_string()
+    })
+}
+
+fn rows(scan: &Scan, repos: &[PathBuf]) -> Vec<Row> {
     let open = gather::open_paths();
-    gather::gather(&repos, &open)
+    let found = gather::gather(repos, &open);
+    let verdicts: Vec<Verdict> = found
+        .iter()
+        .map(|w| decide(&w.facts, scan.max_age))
+        .collect();
+    // `du` is the slow part, so measure only what the caller needs.
+    let measure: Vec<usize> = (0..found.len())
+        .filter(|&i| scan.sizes || verdicts[i].removable())
+        .collect();
+    let paths: Vec<PathBuf> = measure.iter().map(|&i| found[i].path.clone()).collect();
+    let sizes = gather::du_many(&paths);
+    let mut rows: Vec<Row> = found
         .into_iter()
-        .map(|w| Row {
-            verdict: decide(&w.facts, scan.max_age),
+        .zip(verdicts)
+        .map(|(w, verdict)| Row {
+            verdict,
             path: w.path.display().to_string(),
             repo: w.repo.display().to_string(),
             branch: w.branch,
             head: w.head,
-            size_bytes: w.size_bytes,
+            size_bytes: 0,
         })
-        .collect()
+        .collect();
+    for (&i, size) in measure.iter().zip(sizes) {
+        rows[i].size_bytes = size;
+    }
+    rows.sort_by(|a, b| {
+        b.verdict
+            .removable()
+            .cmp(&a.verdict.removable())
+            .then(b.size_bytes.cmp(&a.size_bytes))
+    });
+    rows
 }
 
 pub(crate) fn home() -> PathBuf {
@@ -293,12 +336,23 @@ fn restore(paths: &[PathBuf]) -> ExitCode {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    match cli.cmd.unwrap_or(Cmd::Report) {
-        Cmd::Report => {
-            print_report(&rows(&cli.scan), cli.scan.json);
+    let cmd = cli.cmd.unwrap_or(Cmd::Report);
+    if let Cmd::Restore { paths } = &cmd {
+        return restore(paths);
+    }
+    let repos = match repos(&cli.scan) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("offcut: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let rows = rows(&cli.scan, &repos);
+    match cmd {
+        Cmd::Apply { yes } => apply(&rows, yes),
+        _ => {
+            print_report(&rows, cli.scan.json);
             ExitCode::SUCCESS
         }
-        Cmd::Apply { yes } => apply(&rows(&cli.scan), yes),
-        Cmd::Restore { paths } => restore(&paths),
     }
 }
