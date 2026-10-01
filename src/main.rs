@@ -204,9 +204,16 @@ fn rows(scan: &Scan, repos: &[PathBuf]) -> Vec<Row> {
 fn cache_rows(scan: &Scan, open: &[String]) -> Vec<Row> {
     let mut rows = Vec::new();
     for c in cache::discover() {
+        let orphaned = cache::orphaned(&c.path);
         let verdict = cache::decide(
             gather::in_use(&c.path, open),
-            cache::idle_secs(&c.path),
+            orphaned,
+            // Walking a big cache for its newest file is slow; an orphan needs no age.
+            if orphaned {
+                0
+            } else {
+                cache::idle_secs(&c.path)
+            },
             c.max_age_days,
         );
         // `du` on a build cache can take minutes, so measure only what goes.

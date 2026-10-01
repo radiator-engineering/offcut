@@ -67,7 +67,8 @@ They are gone after a removal, and `restore` cannot bring them back.
 Bazel keeps one output base per workspace under `/private/var/tmp/_bazel_<user>/`.
 They grow without limit. `offcut` lists each one and removes it when no process
 has a file open in it (a running Bazel server holds files open) and nothing in
-it has changed for 7 days. Caches rebuild, so removal is not recorded.
+it has changed for 7 days. A base whose workspace folder is gone (its worktree was
+removed) goes as soon as nothing has it open. Caches rebuild, so removal is not recorded.
 
 To manage other cache folders, add them to `~/.config/offcut/config.toml`.
 A path ending in `/*` means each folder inside it. This replaces the Bazel rule:

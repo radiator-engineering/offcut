@@ -138,9 +138,23 @@ pub fn idle_secs(dir: &Path) -> u64 {
     crate::gather::now().saturating_sub(newest)
 }
 
-pub fn decide(in_use: bool, idle_secs: u64, max_age_days: u64) -> Verdict {
+/// A Bazel output base whose workspace folder no longer exists: its
+/// worktree was removed, so nothing can build into it again. Bazel names the
+/// workspace in `DO_NOT_BUILD_HERE`. No such file, or an unreadable one,
+/// means not orphaned.
+pub fn orphaned(path: &Path) -> bool {
+    std::fs::read_to_string(path.join("DO_NOT_BUILD_HERE"))
+        .ok()
+        .map(|s| s.trim().to_string())
+        .is_some_and(|w| w.starts_with('/') && !Path::new(&w).exists())
+}
+
+pub fn decide(in_use: bool, orphaned: bool, idle_secs: u64, max_age_days: u64) -> Verdict {
     if in_use {
         return Verdict::Keep("a process has files open in it".into());
+    }
+    if orphaned {
+        return Verdict::Remove("its workspace no longer exists".into());
     }
     let days = idle_secs / DAY;
     if days >= max_age_days {
@@ -173,17 +187,42 @@ mod tests {
 
     #[test]
     fn an_old_unused_cache_goes() {
-        assert!(decide(false, 10 * DAY, 7).removable());
+        assert!(decide(false, false, 10 * DAY, 7).removable());
     }
 
     #[test]
     fn a_recent_cache_stays() {
-        assert!(!decide(false, 2 * DAY, 7).removable());
+        assert!(!decide(false, false, 2 * DAY, 7).removable());
     }
 
     #[test]
     fn a_cache_in_use_stays_however_old() {
-        assert!(!decide(true, 400 * DAY, 7).removable());
+        assert!(!decide(true, true, 400 * DAY, 7).removable());
+    }
+
+    #[test]
+    fn a_cache_whose_workspace_is_gone_goes_at_once() {
+        assert!(decide(false, true, 0, 7).removable());
+    }
+
+    #[test]
+    fn orphaned_reads_the_workspace_bazel_recorded() {
+        let d = tempfile::tempdir().unwrap();
+        let base = d.path().join("base");
+        std::fs::create_dir(&base).unwrap();
+        assert!(!orphaned(&base), "no marker file");
+        std::fs::write(
+            base.join("DO_NOT_BUILD_HERE"),
+            d.path().display().to_string(),
+        )
+        .unwrap();
+        assert!(!orphaned(&base), "workspace exists");
+        std::fs::write(
+            base.join("DO_NOT_BUILD_HERE"),
+            d.path().join("gone").display().to_string(),
+        )
+        .unwrap();
+        assert!(orphaned(&base));
     }
 
     #[test]
