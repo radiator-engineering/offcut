@@ -209,8 +209,16 @@ fn facts_for(l: &Listed, repo: &Path, default_ref: Option<&str>, open: &[String]
             .status()
             .is_ok_and(|s| s.success())
     });
+    let worked = git(&l.path, &["reflog", "--format=%gs", "HEAD"]).is_some_and(|s| {
+        s.lines().any(|l| {
+            ["commit", "rebase", "cherry-pick", "merge", "pull"]
+                .iter()
+                .any(|p| l.starts_with(p))
+        })
+    });
     Facts {
         is_main,
+        worked,
         locked: l.locked,
         dirty,
         unpushed,

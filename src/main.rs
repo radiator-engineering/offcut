@@ -73,7 +73,7 @@ enum Cmd {
 
 #[derive(Subcommand)]
 enum ScheduleCmd {
-    /// Install the job: every 6 hours, remove unused build caches and save a report.
+    /// Install the job: every 6 hours, remove unused caches and finished worktrees, save a report.
     Install,
     /// Remove the job.
     Remove,
@@ -85,6 +85,8 @@ enum ScheduleCmd {
 enum Only {
     Worktrees,
     Caches,
+    /// Unused caches, and worktrees that are finished (merged, or the provider says done).
+    Auto,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
@@ -102,6 +104,8 @@ struct Row {
     branch: Option<String>,
     #[serde(skip)]
     head: Option<String>,
+    /// Merged, or a provider says done: the work is over, not just idle.
+    finished: bool,
     size_bytes: u64,
     #[serde(flatten)]
     verdict: Verdict,
@@ -164,6 +168,8 @@ fn rows(scan: &Scan, repos: &[PathBuf]) -> Vec<Row> {
         .zip(verdicts)
         .map(|(w, verdict)| Row {
             kind: Kind::Worktree,
+            finished: (w.facts.merged && w.facts.worked)
+                || w.facts.hint == Some(decide::Hint::Done),
             verdict,
             path: w.path.display().to_string(),
             repo: w.repo.display().to_string(),
@@ -207,6 +213,7 @@ fn cache_rows(scan: &Scan, open: &[String]) -> Vec<Row> {
             repo: String::new(),
             branch: None,
             head: None,
+            finished: false,
             size_bytes,
             verdict,
         });
@@ -252,6 +259,7 @@ fn apply(rows: &[Row], yes: bool, only: Option<Only>) -> ExitCode {
         None => true,
         Some(Only::Worktrees) => r.kind == Kind::Worktree,
         Some(Only::Caches) => r.kind == Kind::Cache,
+        Some(Only::Auto) => r.kind == Kind::Cache || r.finished,
     };
     let todo: Vec<&Row> = rows
         .iter()

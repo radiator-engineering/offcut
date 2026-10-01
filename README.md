@@ -51,7 +51,10 @@ It never removes a worktree that:
 - a provider says to hold.
 
 It removes a worktree that passes all of those and is either merged into the
-default branch or idle for `--max-age` days. It runs `git worktree remove`
+default branch, or idle for `--max-age` days. "Merged" needs a commit, rebase or
+merge made in the worktree. A new worktree has none, and its tip is already in
+the default branch, so without that check it would count as finished the moment
+it was made. It runs `git worktree remove`
 without `--force`, and it does not delete branches.
 
 Files that git ignores (build output, dependencies, `.env`) are not in git.
@@ -85,9 +88,15 @@ offcut schedule status
 offcut schedule remove
 ```
 
-The job removes unused build caches and saves a report of everything else to
-`~/.local/state/offcut/last-report.json`. It never removes a worktree. Worktrees
-are for a person to review: run `offcut`, read the list, then `offcut apply`.
+The job removes two kinds of thing, then saves a report of everything else to
+`~/.local/state/offcut/last-report.json`:
+
+- unused build caches, and
+- finished worktrees: ones with commits in them that are now merged, or that a
+  provider says are done. Each removal is recorded, so `offcut restore` undoes it.
+
+A worktree that is only idle is left for you. Run `offcut`, read the list, then
+`offcut apply`.
 
 ## Providers
 

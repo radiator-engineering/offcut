@@ -72,7 +72,8 @@ A worktree is never removed if any of these is true:
 5. A provider says `hold`.
 
 A worktree is removed only when it is clean and its branch is merged into the
-default branch, or it is clean, pushed, and older than `max_age` (default 30
+default branch and a commit, rebase or merge was made in it (a new worktree
+has none, and its tip is already in the default branch), or it is clean, pushed, and older than `max_age` (default 30
 days, by the newest of the last commit, the index and the folder).
 
 Removal uses `git worktree remove`, then deletes the branch only if it is
@@ -141,7 +142,8 @@ Rust, one binary. Release with cargo-dist and a mise pin, as eventlog does.
 
 `report`, `apply` and `restore` for worktrees; providers, including the
 eventlog one; Bazel output bases and configured cache folders; `schedule`
-(a launchd job that removes unused caches and saves a report, never worktrees).
+(a launchd job that removes unused caches and finished worktrees, and saves a
+report; worktrees that are only idle are left for a person).
 
 Not built: the Claude Code mod, `offcut config`, `[[cache]] max_size`, Linux
 scheduling.

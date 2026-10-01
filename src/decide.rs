@@ -21,6 +21,10 @@ pub struct Facts {
     pub unpushed: usize,
     /// Branch is an ancestor of the default branch.
     pub merged: bool,
+    /// Someone committed, rebased or merged in this worktree. A new worktree
+    /// has none, and its tip is already in the default branch, so `merged`
+    /// alone would call it finished the moment it was made.
+    pub worked: bool,
     /// A process has a file open inside the worktree.
     pub in_use: bool,
     /// Seconds since the last commit or file change, whichever is newer.
@@ -65,13 +69,13 @@ pub fn decide(f: &Facts, max_age_days: u64) -> Verdict {
     if f.unpushed > 0 {
         return Keep(format!("{} commit(s) on no remote branch", f.unpushed));
     }
-    if f.merged {
-        return Remove("clean, pushed, merged".into());
-    }
+    let days = f.idle_secs / DAY;
     if f.hint == Some(Hint::Done) {
         return Remove("clean, pushed, provider says done".into());
     }
-    let days = f.idle_secs / DAY;
+    if f.merged && f.worked {
+        return Remove("clean, pushed, merged".into());
+    }
     if days >= max_age_days {
         return Remove(format!("clean, pushed, idle {days} days"));
     }
@@ -137,13 +141,37 @@ mod tests {
     }
 
     #[test]
-    fn merged_skips_the_age_wait() {
+    fn merged_work_skips_the_age_wait() {
         let f = Facts {
             merged: true,
+            worked: true,
             idle_secs: 0,
             ..clean()
         };
-        assert!(decide(&f, 14).removable());
+        assert!(decide(&f, 30).removable());
+    }
+
+    #[test]
+    fn a_new_worktree_is_not_merged_work() {
+        // Its tip is already in main because nothing has been committed yet.
+        let f = Facts {
+            merged: true,
+            worked: false,
+            idle_secs: DAY,
+            ..clean()
+        };
+        assert!(!decide(&f, 30).removable());
+    }
+
+    #[test]
+    fn an_old_untouched_merged_worktree_still_goes_by_age() {
+        let f = Facts {
+            merged: true,
+            worked: false,
+            idle_secs: 40 * DAY,
+            ..clean()
+        };
+        assert!(decide(&f, 30).removable());
     }
 
     #[test]
@@ -185,6 +213,7 @@ mod tests {
         let f = Facts {
             hint: Some(Hint::Hold),
             merged: true,
+            worked: true,
             ..clean()
         };
         assert!(!decide(&f, 14).removable());

@@ -1,8 +1,10 @@
 //! `offcut schedule`: a macOS launchd job that keeps the machine clean.
 //!
-//! Every six hours it removes unused build caches (they rebuild) and saves a
-//! report of everything else to `~/.local/state/offcut/last-report.json`. It
-//! never removes a worktree: those are for a person to review.
+//! Every six hours it removes unused build caches (they rebuild) and finished
+//! worktrees (merged, or the provider says done), then saves a report of
+//! everything else to `~/.local/state/offcut/last-report.json`. Every worktree
+//! removal is recorded, so `offcut restore` can undo it. Worktrees that are
+//! only idle are left for a person to review.
 
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
@@ -34,7 +36,7 @@ fn job_script(bin: &str, dir: &str) -> String {
     format!(
         "export PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin\"; \
          mkdir -p '{dir}'; \
-         '{bin}' --caches apply --only caches --yes >> '{dir}/job.log' 2>&1; \
+         '{bin}' --all apply --only auto --yes >> '{dir}/job.log' 2>&1; \
          '{bin}' --all report --json > '{dir}/last-report.json.tmp' 2>>'{dir}/job.log' \
          && mv '{dir}/last-report.json.tmp' '{dir}/last-report.json'"
     )
@@ -89,7 +91,9 @@ pub fn install() -> ExitCode {
     {
         Ok(o) if o.status.success() => {
             println!("installed {}", path.display());
-            println!("runs every 6 hours; removes unused build caches, saves a report");
+            println!(
+                "runs every 6 hours; removes unused caches and finished worktrees, saves a report"
+            );
             println!("report: {}/last-report.json", dir.display());
             println!("log:    {}/job.log", dir.display());
             ExitCode::SUCCESS
@@ -149,9 +153,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_job_never_applies_to_worktrees() {
+    fn the_job_removes_only_the_auto_class() {
         let s = job_script("/bin/offcut", "/state");
-        assert!(s.contains("apply --only caches --yes"));
+        assert!(s.contains("apply --only auto --yes"));
         assert_eq!(s.matches("apply").count(), 1);
     }
 
