@@ -3,6 +3,7 @@ mod decide;
 mod gather;
 mod manifest;
 mod provider;
+mod schedule;
 
 use clap::{Parser, Subcommand};
 use decide::{Verdict, decide};
@@ -54,12 +55,36 @@ enum Cmd {
         /// Do not ask for confirmation.
         #[arg(long)]
         yes: bool,
+        /// Remove only this kind of item.
+        #[arg(long, value_enum)]
+        only: Option<Only>,
+    },
+    /// Keep the machine clean with a scheduled job (macOS launchd).
+    Schedule {
+        #[command(subcommand)]
+        action: ScheduleCmd,
     },
     /// Put back worktrees that `apply` removed. With no path, list what can be restored.
     Restore {
         /// Worktree paths to restore.
         paths: Vec<PathBuf>,
     },
+}
+
+#[derive(Subcommand)]
+enum ScheduleCmd {
+    /// Install the job: every 6 hours, remove unused build caches and save a report.
+    Install,
+    /// Remove the job.
+    Remove,
+    /// Show whether the job is installed and when it last reported.
+    Status,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum Only {
+    Worktrees,
+    Caches,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
@@ -222,8 +247,16 @@ fn print_report(rows: &[Row], json: bool) {
     );
 }
 
-fn apply(rows: &[Row], yes: bool) -> ExitCode {
-    let todo: Vec<&Row> = rows.iter().filter(|r| r.verdict.removable()).collect();
+fn apply(rows: &[Row], yes: bool, only: Option<Only>) -> ExitCode {
+    let wanted = |r: &Row| match only {
+        None => true,
+        Some(Only::Worktrees) => r.kind == Kind::Worktree,
+        Some(Only::Caches) => r.kind == Kind::Cache,
+    };
+    let todo: Vec<&Row> = rows
+        .iter()
+        .filter(|r| r.verdict.removable() && wanted(r))
+        .collect();
     if todo.is_empty() {
         println!("nothing to remove");
         return ExitCode::SUCCESS;
@@ -231,7 +264,8 @@ fn apply(rows: &[Row], yes: bool) -> ExitCode {
     for r in &todo {
         println!("remove  {:>9}  {}", gib(r.size_bytes), r.path);
     }
-    println!("\n{} items, {}", todo.len(), gib(reclaimable(rows)));
+    let total: u64 = todo.iter().map(|r| r.size_bytes).sum();
+    println!("\n{} items, {}", todo.len(), gib(total));
     if !yes {
         print!("Remove these? [y/N] ");
         let _ = std::io::stdout().flush();
@@ -402,8 +436,16 @@ fn restore(paths: &[PathBuf]) -> ExitCode {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let cmd = cli.cmd.unwrap_or(Cmd::Report);
-    if let Cmd::Restore { paths } = &cmd {
-        return restore(paths);
+    match &cmd {
+        Cmd::Restore { paths } => return restore(paths),
+        Cmd::Schedule { action } => {
+            return match action {
+                ScheduleCmd::Install => schedule::install(),
+                ScheduleCmd::Remove => schedule::remove(),
+                ScheduleCmd::Status => schedule::status(),
+            };
+        }
+        _ => {}
     }
     let repos = match repos(&cli.scan) {
         Ok(r) => r,
@@ -416,7 +458,7 @@ fn main() -> ExitCode {
     };
     let rows = rows(&cli.scan, &repos);
     match cmd {
-        Cmd::Apply { yes } => apply(&rows, yes),
+        Cmd::Apply { yes, only } => apply(&rows, yes, only),
         _ => {
             print_report(&rows, cli.scan.json);
             ExitCode::SUCCESS

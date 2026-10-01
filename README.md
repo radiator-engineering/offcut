@@ -25,12 +25,16 @@ offcut                      # same as `offcut report`; deletes nothing
 offcut apply                # show the plan, ask, then remove
 offcut restore              # list what `apply` removed
 offcut restore <path>       # put one back
+offcut --caches report      # also list unused build caches (Bazel output bases)
+offcut schedule install     # keep the machine clean in the background
 ```
 
 | Flag | Meaning |
 |---|---|
 | `--root <dir>` | Scan the repos under a folder instead. Repeatable. |
-| `--all` | Scan everything under `~/Development`. |
+| `--all` | Scan everything under `~/Development`, and the build caches. |
+| `--caches` | Also look at build caches. Works outside a repo. |
+| `apply --only worktrees\|caches` | Remove only one kind of item. |
 | `--max-age <days>` | Idle days before a clean, pushed worktree goes. Default 30. |
 | `--sizes` | Measure every worktree, not only the removable ones. Slower. |
 | `--json` | Print JSON. |
@@ -52,6 +56,38 @@ without `--force`, and it does not delete branches.
 
 Files that git ignores (build output, dependencies, `.env`) are not in git.
 They are gone after a removal, and `restore` cannot bring them back.
+
+## Build caches
+
+Bazel keeps one output base per workspace under `/private/var/tmp/_bazel_<user>/`.
+They grow without limit. `offcut` lists each one and removes it when no process
+has a file open in it (a running Bazel server holds files open) and nothing in
+it has changed for 7 days. Caches rebuild, so removal is not recorded.
+
+To manage other cache folders, add them to `~/.config/offcut/config.toml`.
+A path ending in `/*` means each folder inside it. This replaces the Bazel rule:
+
+```toml
+[[cache]]
+path = "/private/var/tmp/_bazel_me/*"
+max_age_days = 7
+
+[[cache]]
+path = "~/Library/Caches/some-tool"
+max_age_days = 30
+```
+
+## Keeping it clean
+
+```sh
+offcut schedule install     # macOS launchd job, every 6 hours
+offcut schedule status
+offcut schedule remove
+```
+
+The job removes unused build caches and saves a report of everything else to
+`~/.local/state/offcut/last-report.json`. It never removes a worktree. Worktrees
+are for a person to review: run `offcut`, read the list, then `offcut apply`.
 
 ## Providers
 

@@ -205,6 +205,7 @@ fn facts_for(l: &Listed, repo: &Path, default_ref: Option<&str>, open: &[String]
             .arg("-C")
             .arg(&l.path)
             .args(["merge-base", "--is-ancestor", "HEAD", d])
+            .stderr(std::process::Stdio::null())
             .status()
             .is_ok_and(|s| s.success())
     });

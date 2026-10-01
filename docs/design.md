@@ -137,6 +137,15 @@ the reason. `--json` prints the same. It ends with the total reclaimable.
 
 Rust, one binary. Release with cargo-dist and a mise pin, as eventlog does.
 
+## Built so far
+
+`report`, `apply` and `restore` for worktrees; providers, including the
+eventlog one; Bazel output bases and configured cache folders; `schedule`
+(a launchd job that removes unused caches and saves a report, never worktrees).
+
+Not built: the Claude Code mod, `offcut config`, `[[cache]] max_size`, Linux
+scheduling.
+
 ## Open questions
 
 - Should `apply` also run `git worktree prune` and `git gc`?
