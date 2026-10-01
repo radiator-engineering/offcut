@@ -1,0 +1,35 @@
+README.md
+  s_bbca6749af64d5::t_53bc4c50868ec1 28-29,35-37,60-91
+docs/design.md
+  s_bbca6749af64d5::t_c2570a9209135d 140-148
+src/gather.rs
+  s_bbca6749af64d5::t_6d49cfacfa2969 208
+src/main.rs
+  s_0ded5f8cda5a6b::t_d84ad6cd3f3292 6,58-65,74-89,250-259,267-268,439-448,461
+src/schedule.rs
+  s_bbca6749af64d5::t_869821f7ce4a82 1-172
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "bbba0234fb8f29cf11cf289870c8f217e237c6c4",
+  "prompts": {},
+  "sessions": {
+    "s_0ded5f8cda5a6b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e18c9e49-6bc7-4f63-afa4-bc1b9d4bb3be",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Jacob Martin <martinjaco@gmail.com>"
+    },
+    "s_bbca6749af64d5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "df235a51-21c1-4d4d-aa50-fbcecee9f3f3",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Jacob Martin <martinjaco@gmail.com>"
+    }
+  }
+}
