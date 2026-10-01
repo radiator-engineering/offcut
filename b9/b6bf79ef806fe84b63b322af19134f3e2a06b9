@@ -1,0 +1,19 @@
+.github/workflows/ci.yml
+  s_0ded5f8cda5a6b::t_092c7803b820dc 1-16
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "b9b6bf79ef806fe84b63b322af19134f3e2a06b9",
+  "prompts": {},
+  "sessions": {
+    "s_0ded5f8cda5a6b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e18c9e49-6bc7-4f63-afa4-bc1b9d4bb3be",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Jacob Martin <martinjaco@gmail.com>"
+    }
+  }
+}
