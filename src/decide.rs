@@ -27,6 +27,9 @@ pub struct Facts {
     pub worked: bool,
     /// A process has a file open inside the worktree.
     pub in_use: bool,
+    /// When every process holding the worktree is an orphan working in it
+    /// (see `gather::orphans_holding`), their pids. Empty otherwise.
+    pub orphans: Vec<u32>,
     /// Seconds since the last commit or file change, whichever is newer.
     pub idle_secs: u64,
     pub hint: Option<Hint>,
@@ -60,7 +63,10 @@ pub fn decide(f: &Facts, max_age_days: u64) -> Verdict {
     if f.locked {
         return Keep("locked".into());
     }
-    if f.in_use {
+    // An orphaned process may be stopped only for a worktree whose owner the
+    // provider says is done; anything else in use stays.
+    let stops_orphans = f.in_use && !f.orphans.is_empty() && f.hint == Some(Hint::Done);
+    if f.in_use && !stops_orphans {
         return Keep("a process has files open in it".into());
     }
     if f.dirty {
@@ -70,6 +76,12 @@ pub fn decide(f: &Facts, max_age_days: u64) -> Verdict {
         return Keep(format!("{} commit(s) on no remote branch", f.unpushed));
     }
     let days = f.idle_secs / DAY;
+    if stops_orphans {
+        return Remove(format!(
+            "clean, pushed, provider says done; stops {} orphaned process(es)",
+            f.orphans.len()
+        ));
+    }
     if f.hint == Some(Hint::Done) {
         return Remove("clean, pushed, provider says done".into());
     }
@@ -205,6 +217,37 @@ mod tests {
             },
         ] {
             assert!(!decide(&f, 14).removable(), "{f:?}");
+        }
+    }
+
+    #[test]
+    fn orphans_are_stopped_only_for_a_done_clean_pushed_worktree() {
+        let held = Facts {
+            in_use: true,
+            orphans: vec![42],
+            ..clean()
+        };
+        let done = Facts {
+            hint: Some(Hint::Done),
+            ..held.clone()
+        };
+        assert!(decide(&done, 30).removable());
+        assert!(!decide(&held, 30).removable(), "no done from the provider");
+        for f in [
+            Facts {
+                dirty: true,
+                ..done.clone()
+            },
+            Facts {
+                unpushed: 1,
+                ..done.clone()
+            },
+            Facts {
+                orphans: vec![],
+                ..done.clone()
+            },
+        ] {
+            assert!(!decide(&f, 30).removable(), "{f:?}");
         }
     }
 

@@ -12,12 +12,13 @@ const errText = (err: unknown): string => (err instanceof Error ? err.message : 
  * and leaves `offcut` running in a process group of its own, so neither a
  * turn nor an exit waits on it and Claude Code's exit does not kill it.
  * `delay` gives an ending session time to exit, so its own worktree is no
- * longer in use when offcut looks. `caches` also clears unused build caches,
- * which takes longer, so only an ending session asks for it.
+ * longer in use when offcut looks. `caches` widens the run to every repo
+ * under ~/Development (`--all`) and clears unused build caches and build
+ * output; that takes longer, so it runs at most every 10 minutes and at exit.
  */
 export const launchArgv = (offcut: string, delay: number, caches: boolean): string[] => [
   offcut,
-  ...(caches ? ['--caches'] : []),
+  ...(caches ? ['--all'] : []),
   'apply',
   '--only',
   'auto',

@@ -138,6 +138,56 @@ pub fn idle_secs(dir: &Path) -> u64 {
     crate::gather::now().saturating_sub(newest)
 }
 
+/// The signature every `CACHEDIR.TAG` starts with
+/// (<https://bford.info/cachedir/>). Cargo writes one in `target/`.
+const CACHEDIR_SIGNATURE: &str = "Signature: 8a477f597d28d172789f06886806bc55";
+
+/// Build output folders inside a worktree: folders holding a valid
+/// `CACHEDIR.TAG`, at most three levels down. Does not look inside `.git`,
+/// `node_modules`,
+/// inside a tagged folder, or through symbolic links.
+pub fn tagged_in(worktree: &Path) -> Vec<PathBuf> {
+    fn walk(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+        let tagged = std::fs::read_to_string(dir.join("CACHEDIR.TAG"))
+            .is_ok_and(|t| t.starts_with(CACHEDIR_SIGNATURE));
+        if tagged {
+            out.push(dir.to_path_buf());
+            return;
+        }
+        if depth == 0 {
+            return;
+        }
+        for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let Ok(ft) = e.file_type() else { continue };
+            if ft.is_dir() && e.file_name() != ".git" && e.file_name() != "node_modules" {
+                walk(&e.path(), depth - 1, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(worktree, 3, &mut out);
+    out.retain(|p| p != worktree);
+    out
+}
+
+/// Like [`idle_secs`], one level deeper: a build touches `target/debug/*`
+/// without always touching `target/` or `target/debug`.
+pub fn idle_secs_two_deep(dir: &Path) -> u64 {
+    let children: Vec<PathBuf> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .collect();
+    let newest = children
+        .iter()
+        .map(|c| crate::gather::now().saturating_sub(idle_secs(c)))
+        .chain([mtime(dir)])
+        .max()
+        .unwrap_or(0);
+    crate::gather::now().saturating_sub(newest)
+}
+
 /// A Bazel output base whose workspace folder no longer exists: its
 /// worktree was removed, so nothing can build into it again. Bazel names the
 /// workspace in `DO_NOT_BUILD_HERE`. No such file, or an unreadable one,
@@ -223,6 +273,36 @@ mod tests {
         )
         .unwrap();
         assert!(orphaned(&base));
+    }
+
+    #[test]
+    fn build_output_is_found_by_its_cachedir_tag() {
+        let d = tempfile::tempdir().unwrap();
+        let w = d.path();
+        let tag = |p: &Path, text: &str| {
+            std::fs::create_dir_all(p).unwrap();
+            std::fs::write(p.join("CACHEDIR.TAG"), text).unwrap();
+        };
+        tag(
+            &w.join("target"),
+            "Signature: 8a477f597d28d172789f06886806bc55\n# cargo",
+        );
+        tag(
+            &w.join("crates/x/target"),
+            "Signature: 8a477f597d28d172789f06886806bc55",
+        );
+        tag(
+            &w.join("target/inner"),
+            "Signature: 8a477f597d28d172789f06886806bc55",
+        );
+        tag(&w.join("fake"), "not a signature");
+        tag(
+            &w.join(".git/t"),
+            "Signature: 8a477f597d28d172789f06886806bc55",
+        );
+        let mut found = tagged_in(w);
+        found.sort();
+        assert_eq!(found, vec![w.join("crates/x/target"), w.join("target")]);
     }
 
     #[test]

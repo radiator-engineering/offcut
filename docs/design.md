@@ -58,7 +58,7 @@ Claude Code mod to `~/.claude/skills/offcut/`. It loads in every session and:
   `offcut` on PATH. Without either, it does nothing for that session.
 - at every `turn.complete`, the main agent's or a subagent's, starts
   `offcut apply --only auto --yes --detach` in the main repo.
-- at `session.end`, starts the same with `--caches --delay 5`. The delay lets
+- at `session.end`, starts the same with `--all --delay 5`. The delay lets
   the session exit first, so its own worktree is no longer in use when offcut
   looks.
 

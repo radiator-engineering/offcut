@@ -112,6 +112,9 @@ struct Row {
     branch: Option<String>,
     #[serde(skip)]
     head: Option<String>,
+    /// Orphaned processes `apply` stops before removing this worktree.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    orphans: Vec<u32>,
     /// Merged, or a provider says done: the work is over, not just idle.
     finished: bool,
     size_bytes: u64,
@@ -178,6 +181,12 @@ fn rows(scan: &Scan, repos: &[PathBuf]) -> Vec<Row> {
             kind: Kind::Worktree,
             finished: (w.facts.merged && w.facts.worked)
                 || w.facts.hint == Some(decide::Hint::Done),
+            // Removable while in use means only orphans hold it.
+            orphans: if verdict.removable() && w.facts.in_use {
+                w.facts.orphans.clone()
+            } else {
+                Vec::new()
+            },
             verdict,
             path: w.path.display().to_string(),
             repo: w.repo.display().to_string(),
@@ -190,6 +199,12 @@ fn rows(scan: &Scan, repos: &[PathBuf]) -> Vec<Row> {
         rows[i].size_bytes = size;
     }
     if scan.caches || scan.all {
+        let kept: Vec<PathBuf> = rows
+            .iter()
+            .filter(|r| !r.verdict.removable())
+            .map(|r| PathBuf::from(&r.path))
+            .collect();
+        rows.extend(build_output_rows(scan, &kept, &open));
         rows.extend(cache_rows(scan, &open));
     }
     rows.sort_by(|a, b| {
@@ -201,7 +216,44 @@ fn rows(scan: &Scan, repos: &[PathBuf]) -> Vec<Row> {
     rows
 }
 
-fn cache_rows(scan: &Scan, open: &[String]) -> Vec<Row> {
+/// Days a build output folder inside a kept worktree must sit unchanged.
+/// Removing it costs a rebuild, never work.
+const BUILD_OUTPUT_DAYS: u64 = 2;
+
+/// Build output (`target/` and other `CACHEDIR.TAG` folders) inside worktrees
+/// that stay. A worktree that goes takes its build output with it.
+fn build_output_rows(scan: &Scan, kept: &[PathBuf], open: &[gather::Open]) -> Vec<Row> {
+    let mut rows = Vec::new();
+    for w in kept {
+        for t in cache::tagged_in(w) {
+            let verdict = cache::decide(
+                gather::in_use(&t, open),
+                false,
+                cache::idle_secs_two_deep(&t),
+                BUILD_OUTPUT_DAYS,
+            );
+            let size_bytes = if scan.sizes || verdict.removable() {
+                gather::du_bytes(&t)
+            } else {
+                0
+            };
+            rows.push(Row {
+                kind: Kind::Cache,
+                path: t.display().to_string(),
+                repo: String::new(),
+                branch: None,
+                head: None,
+                orphans: Vec::new(),
+                finished: false,
+                size_bytes,
+                verdict,
+            });
+        }
+    }
+    rows
+}
+
+fn cache_rows(scan: &Scan, open: &[gather::Open]) -> Vec<Row> {
     let mut rows = Vec::new();
     for c in cache::discover() {
         let orphaned = cache::orphaned(&c.path);
@@ -228,6 +280,7 @@ fn cache_rows(scan: &Scan, open: &[String]) -> Vec<Row> {
             repo: String::new(),
             branch: None,
             head: None,
+            orphans: Vec::new(),
             finished: false,
             size_bytes,
             verdict,
@@ -333,6 +386,10 @@ fn apply(rows: &[Row], yes: bool, only: Option<Only>) -> ExitCode {
             eprintln!("stopped: cannot write {}: {e}", manifest::file().display());
             return ExitCode::FAILURE;
         }
+        if !r.orphans.is_empty() {
+            stop(&r.orphans);
+            println!("stopped orphaned process(es) {:?} in {}", r.orphans, r.path);
+        }
         // Never --force: git refuses if the worktree changed since the report.
         let out = Command::new("git")
             .arg("-C")
@@ -359,6 +416,36 @@ fn apply(rows: &[Row], yes: bool, only: Option<Only>) -> ExitCode {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
+    }
+}
+
+/// SIGTERM, up to 5 s to exit, then SIGKILL for any still running.
+fn stop(pids: &[u32]) {
+    let alive = |p: &u32| {
+        Command::new("kill")
+            .args(["-0", &p.to_string()])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+    };
+    let send = |sig: &str, ps: &[u32]| {
+        let _ = Command::new("kill")
+            .arg(sig)
+            .args(ps.iter().map(u32::to_string))
+            .stderr(std::process::Stdio::null())
+            .status();
+    };
+    send("-TERM", pids);
+    for _ in 0..50 {
+        if !pids.iter().any(alive) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let left: Vec<u32> = pids.iter().copied().filter(alive).collect();
+    if !left.is_empty() {
+        send("-KILL", &left);
+        std::thread::sleep(std::time::Duration::from_millis(300));
     }
 }
 

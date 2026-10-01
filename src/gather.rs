@@ -123,27 +123,89 @@ fn default_branch_ref(repo: &Path) -> Option<String> {
         .map(String::from)
 }
 
-/// Every path a process has open or uses as its working directory, from one
-/// `lsof` call. An empty set if `lsof` is missing.
-pub fn open_paths() -> Vec<String> {
-    let Ok(out) = Command::new("lsof").args(["-w", "-F", "n"]).output() else {
-        return Vec::new();
-    };
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .filter_map(|l| l.strip_prefix('n'))
-        .filter(|p| p.starts_with('/'))
-        .map(String::from)
-        .collect()
+/// One open file, or a working directory, of one process.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Open {
+    pub pid: u32,
+    /// The parent's pid. 1 means the parent exited and launchd adopted it.
+    pub ppid: u32,
+    /// This is the process's working directory, not a file it opened.
+    pub cwd: bool,
+    pub path: String,
 }
 
-pub fn in_use(path: &Path, open: &[String]) -> bool {
+/// Every path a process has open or uses as its working directory, from one
+/// `lsof` call. Empty if `lsof` is missing.
+pub fn open_paths() -> Vec<Open> {
+    let Ok(out) = Command::new("lsof").args(["-w", "-F", "pRfn"]).output() else {
+        return Vec::new();
+    };
+    parse_lsof(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Parse `lsof -F pRfn`: a `p` line starts a process, `R` gives its parent,
+/// then each file is an `f` line followed by its `n` line.
+pub fn parse_lsof(text: &str) -> Vec<Open> {
+    let (mut pid, mut ppid, mut cwd) = (0, 0, false);
+    let mut out = Vec::new();
+    for l in text.lines() {
+        let (tag, rest) = l.split_at(l.len().min(1));
+        match tag {
+            "p" => {
+                pid = rest.parse().unwrap_or(0);
+                ppid = 0;
+            }
+            "R" => ppid = rest.parse().unwrap_or(0),
+            "f" => cwd = rest == "cwd",
+            "n" if rest.starts_with('/') => out.push(Open {
+                pid,
+                ppid,
+                cwd,
+                path: rest.to_string(),
+            }),
+            _ => {}
+        }
+    }
+    out
+}
+
+fn under(path: &Path, o: &str) -> bool {
     let p = path.to_string_lossy();
-    open.iter().any(|o| {
-        o == p.as_ref()
-            || o.strip_prefix(p.as_ref())
-                .is_some_and(|r| r.starts_with('/'))
-    })
+    o == p.as_ref()
+        || o.strip_prefix(p.as_ref())
+            .is_some_and(|r| r.starts_with('/'))
+}
+
+pub fn in_use(path: &Path, open: &[Open]) -> bool {
+    open.iter().any(|o| under(path, &o.path))
+}
+
+/// The processes holding `path`, when every one of them is an orphan left
+/// running in it: its parent exited (parent pid 1) and its working directory
+/// is inside `path`. A dev server an agent started and walked away from looks
+/// like this. Empty when nothing holds `path`, or when any holder is not
+/// such an orphan, such as a shell, an editor, or a running agent.
+pub fn orphans_holding(path: &Path, open: &[Open]) -> Vec<u32> {
+    let mut pids: Vec<u32> = open
+        .iter()
+        .filter(|o| under(path, &o.path))
+        .map(|o| o.pid)
+        .collect();
+    pids.sort_unstable();
+    pids.dedup();
+    let me = std::process::id();
+    let orphan = |pid: u32| {
+        pid != me
+            && open.iter().any(|o| o.pid == pid && o.ppid == 1)
+            && open
+                .iter()
+                .any(|o| o.pid == pid && o.cwd && under(path, &o.path))
+    };
+    if pids.iter().all(|&p| orphan(p)) {
+        pids
+    } else {
+        Vec::new()
+    }
 }
 
 /// Disk use of one folder, from `du`. Slow on big trees, so callers ask only
@@ -194,7 +256,7 @@ fn idle_secs(path: &Path) -> u64 {
     now().saturating_sub(newest)
 }
 
-fn facts_for(l: &Listed, repo: &Path, default_ref: Option<&str>, open: &[String]) -> Facts {
+fn facts_for(l: &Listed, repo: &Path, default_ref: Option<&str>, open: &[Open]) -> Facts {
     let is_main = l.path == repo || l.bare;
     let dirty = git(&l.path, &["status", "--porcelain"]).is_none_or(|s| !s.trim().is_empty());
     // If git cannot answer, assume the worst: dirty and unpushed.
@@ -224,6 +286,7 @@ fn facts_for(l: &Listed, repo: &Path, default_ref: Option<&str>, open: &[String]
         unpushed,
         merged,
         in_use: in_use(&l.path, open),
+        orphans: orphans_holding(&l.path, open),
         idle_secs: idle_secs(&l.path),
         hint: None,
     }
@@ -231,7 +294,7 @@ fn facts_for(l: &Listed, repo: &Path, default_ref: Option<&str>, open: &[String]
 
 /// Gather every linked worktree under the given repos. Worktrees whose folder
 /// is gone are skipped.
-pub fn gather(repos: &[PathBuf], open: &[String]) -> Vec<Worktree> {
+pub fn gather(repos: &[PathBuf], open: &[Open]) -> Vec<Worktree> {
     let mut jobs: Vec<(PathBuf, Listed, Option<String>)> = Vec::new();
     for repo in repos {
         let default_ref = default_branch_ref(repo);
@@ -287,4 +350,56 @@ pub fn du_many(paths: &[PathBuf]) -> Vec<u64> {
         out.extend(done);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const LSOF: &str = "p100\nR1\nfcwd\nn/r/.worktrees/a\nf3\nn/r/.worktrees/a/log\n\
+p200\nR50\nfcwd\nn/r/.worktrees/b\n\
+p300\nR1\nfcwd\nn/\nf4\nn/r/.worktrees/c/x\n\
+p400\nR1\nfcwd\nn/r/.worktrees/c\n";
+
+    #[test]
+    fn lsof_output_is_read_per_process() {
+        let o = parse_lsof(LSOF);
+        assert_eq!(
+            o[0],
+            Open {
+                pid: 100,
+                ppid: 1,
+                cwd: true,
+                path: "/r/.worktrees/a".into()
+            }
+        );
+        assert!(!o[1].cwd);
+        assert_eq!(o.len(), 6);
+    }
+
+    #[test]
+    fn an_orphan_working_in_the_worktree_is_listed() {
+        let o = parse_lsof(LSOF);
+        assert_eq!(orphans_holding(Path::new("/r/.worktrees/a"), &o), vec![100]);
+    }
+
+    #[test]
+    fn a_process_whose_parent_lives_is_not_an_orphan() {
+        let o = parse_lsof(LSOF);
+        assert!(orphans_holding(Path::new("/r/.worktrees/b"), &o).is_empty());
+    }
+
+    #[test]
+    fn one_holder_that_only_opened_a_file_protects_the_worktree() {
+        // pid 300 was adopted by launchd but works elsewhere; it may be a
+        // system service reading the file. pid 400 alone would qualify.
+        let o = parse_lsof(LSOF);
+        assert!(orphans_holding(Path::new("/r/.worktrees/c"), &o).is_empty());
+    }
+
+    #[test]
+    fn a_folder_nobody_holds_has_no_orphans() {
+        let o = parse_lsof(LSOF);
+        assert!(orphans_holding(Path::new("/r/.worktrees/z"), &o).is_empty());
+    }
 }

@@ -49,7 +49,8 @@ It never removes a worktree that:
 - has uncommitted or untracked changes,
 - has commits that no remote branch contains,
 - is locked,
-- has a process with a file open in it, or
+- has a process with a file open in it (unless every such process is an
+  orphan working in it and a provider says done; see below), or
 - a provider says to hold.
 
 It removes a worktree that passes all of those and is either merged into the
@@ -61,6 +62,23 @@ without `--force`, and it does not delete branches.
 
 Files that git ignores (build output, dependencies, `.env`) are not in git.
 They are gone after a removal, and `restore` cannot bring them back.
+
+## Orphaned processes
+
+Agents start dev servers and leave them running. Their parent exits, launchd
+adopts them (parent pid 1), and they hold the worktree open forever. When a
+provider says a worktree is done and every process holding it is such an
+orphan, with its working directory inside the worktree, `apply` stops those
+processes (SIGTERM, then SIGKILL after 5 s) and removes the worktree. A
+process with a live parent, or one working elsewhere, still protects it.
+
+## Build output in worktrees
+
+A worktree that stays can still hold gigabytes of build output. With
+`--caches` or `--all`, `offcut` finds folders holding a `CACHEDIR.TAG` (Cargo's
+`target/`, Python tool caches, uv virtualenvs) up to three levels into each
+kept worktree, and removes one when nothing has it open and it has not
+changed for 2 days. Removing one costs a rebuild, never work.
 
 ## Build caches
 
@@ -97,8 +115,9 @@ subagent's, it runs this in the background, in the repo the session works in:
 offcut apply --only auto --yes --detach
 ```
 
-At most every 10 minutes a turn's run adds `--caches`, so a long session
-clears caches too. When the session ends, it runs the same with `--caches --delay 5`, so the
+At most every 10 minutes a turn's run adds `--all`: every repo under
+`~/Development`, plus build caches and build output. When the session ends, it
+runs the same with `--all --delay 5`, so the
 session's own worktree is no longer in use when offcut looks.
 
 `--only auto` removes two kinds of thing:

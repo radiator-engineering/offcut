@@ -47,7 +47,7 @@ describe('when it cleans up', () => {
     await w.start($)
     await $.turn.complete(turn())
     expect(w.launched).toEqual([
-      { argv: ['/bin/offcut', '--caches', 'apply', '--only', 'auto', '--yes', '--detach'], cwd: '/repo' },
+      { argv: ['/bin/offcut', '--all', 'apply', '--only', 'auto', '--yes', '--detach'], cwd: '/repo' },
     ])
     await $.turn.complete(turn())
     expect(w.launched[1]?.argv).toEqual(['/bin/offcut', 'apply', '--only', 'auto', '--yes', '--detach'])
@@ -104,7 +104,7 @@ describe('the launch command', () => {
   test('an ending session waits, then also clears caches', () => {
     expect(launchArgv('/bin/offcut', 5, true)).toEqual([
       '/bin/offcut',
-      '--caches',
+      '--all',
       'apply',
       '--only',
       'auto',
