@@ -1,0 +1,6 @@
+{
+  "name": "offcut",
+  "version": "0.1.0",
+  "description": "Cleans up finished git worktrees as soon as a turn or a session ends. When a turn ends (the main session's or a subagent's), it runs `offcut apply --only auto --yes` for the session's repo in the background: a worktree goes only if it is clean, pushed, and its work is merged or eventlog says its agent is done. When the session ends, it runs once more a few seconds later, also clearing unused build caches, so the session's own worktree can go. Every removal is recorded for `offcut restore`. Inert when `offcut` is not installed, outside a git repo, or with OFFCUT=off.",
+  "author": { "name": "radiator-engineering" }
+}

@@ -18,8 +18,7 @@ folders held about 154 GB across six repos. Bazel's output base held about
 |---|---|
 | CLI (`offcut`) | Find, measure, decide, delete. Owns every safety rule. |
 | Providers | Commands that print facts about paths. Optional. |
-| Mod (later) | At `session.start`, run `offcut report --json` and print one line. Never deletes. |
-| Scheduled job (later) | Run `offcut report`, then `offcut apply` once reports have looked right. |
+| Claude Code mod (`mod/`) | When a turn or session ends, start `offcut apply --only auto --yes --detach`. Holds no rules of its own. |
 
 `offcut` never writes to an event log. A provider only reads.
 
@@ -29,6 +28,7 @@ folders held about 154 GB across six repos. Bazel's output base held about
 offcut report [--root <dir>]... [--all] [--sizes] [--json]   # default; deletes nothing
 offcut apply  [--root <dir>]... [--only worktrees|caches] [--yes]
 offcut restore [<path>]...                  # undo removals; no path lists them
+offcut mod install|remove                   # the Claude Code mod
 offcut config                               # print the effective config (not built yet)
 ```
 
@@ -48,6 +48,33 @@ repo, path, branch and commit to `~/.local/state/offcut/removed.jsonl`. If
 that write fails, `apply` stops. `restore` re-adds the worktree on its branch,
 or detached at the recorded commit when the branch is gone or in use. Files
 git ignores (build output, dependencies, `.env`) do not come back.
+
+## Cleaning up as you go
+
+Cleanup happens when work ends, not on a timer. `offcut mod install` writes a
+Claude Code mod to `~/.claude/skills/offcut/`. It loads in every session and:
+
+- at `session.start`, finds the main repo of the session's folder and
+  `offcut` on PATH. Without either, it does nothing for that session.
+- at every `turn.complete`, the main agent's or a subagent's, starts
+  `offcut apply --only auto --yes --detach` in the main repo.
+- at `session.end`, starts the same with `--caches --delay 5`. The delay lets
+  the session exit first, so its own worktree is no longer in use when offcut
+  looks.
+
+`--only auto` removes unused caches and finished worktrees only: merged with
+commits made in them, or a provider says done. A worktree that is only idle
+waits for a person to run `offcut apply`.
+
+`--detach` starts the run in a process group of its own and returns at once,
+so a turn never waits on it. Claude Code kills its children's process group
+when it exits, and without its own group the session-end run would die
+during its delay. Output goes to `~/.local/state/offcut/apply.log`.
+
+Runs can overlap: several sessions, one run per turn. `apply` takes a lock
+(`~/.local/state/offcut/apply.lock`), waits up to 60 s for it, then skips. A
+lock whose process is dead is taken over. `OFFCUT=off` turns the mod off for
+one session.
 
 ## Candidates
 
@@ -141,16 +168,16 @@ Rust, one binary. Release with cargo-dist and a mise pin, as eventlog does.
 ## Built so far
 
 `report`, `apply` and `restore` for worktrees; providers, including the
-eventlog one; Bazel output bases and configured cache folders; `schedule`
-(a launchd job that removes unused caches and finished worktrees, and saves a
-report; worktrees that are only idle are left for a person).
+eventlog one; Bazel output bases and configured cache folders; the Claude
+Code mod with `apply --detach`, `--delay` and the apply lock.
 
-Not built: the Claude Code mod, `offcut config`, `[[cache]] max_size`, Linux
-scheduling.
+A launchd job that ran every 6 hours was built and then removed: cleanup
+belongs at the end of the work, not on a timer.
+
+Not built: `offcut config`, `[[cache]] max_size`.
 
 ## Open questions
 
 - Should `apply` also run `git worktree prune` and `git gc`?
 - Bazel: call `bazel clean --expunge` or delete the output base directly?
   Check first whether Bazel's own disk-cache size limit makes this unnecessary.
-- Does the scheduled job ever run `apply`, or only `report`? Start with `report`.

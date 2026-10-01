@@ -1,0 +1,4 @@
+{
+  "description": "turn.complete and session.end start a detached `offcut apply --only auto --yes` for the session's repo.",
+  "modules": ["./register.ts"]
+}

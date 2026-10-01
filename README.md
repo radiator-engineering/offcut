@@ -26,7 +26,7 @@ offcut apply                # show the plan, ask, then remove
 offcut restore              # list what `apply` removed
 offcut restore <path>       # put one back
 offcut --caches report      # also list unused build caches (Bazel output bases)
-offcut schedule install     # keep the machine clean in the background
+offcut mod install          # clean up when each Claude Code turn or session ends
 ```
 
 | Flag | Meaning |
@@ -39,6 +39,8 @@ offcut schedule install     # keep the machine clean in the background
 | `--sizes` | Measure every worktree, not only the removable ones. Slower. |
 | `--json` | Print JSON. |
 | `apply --yes` | Skip the confirmation. |
+| `apply --detach` | Run in the background and return at once. Needs `--yes`. |
+| `apply --delay <secs>` | Wait before looking. |
 
 ## What it will and won't remove
 
@@ -80,16 +82,24 @@ path = "~/Library/Caches/some-tool"
 max_age_days = 30
 ```
 
-## Keeping it clean
+## Cleaning up as you go
 
 ```sh
-offcut schedule install     # macOS launchd job, every 6 hours
-offcut schedule status
-offcut schedule remove
+offcut mod install          # writes ~/.claude/skills/offcut
+offcut mod remove
 ```
 
-The job removes two kinds of thing, then saves a report of everything else to
-`~/.local/state/offcut/last-report.json`:
+This installs a Claude Code mod. When a turn ends, the main agent's or a
+subagent's, it runs this in the background, in the repo the session works in:
+
+```sh
+offcut apply --only auto --yes --detach
+```
+
+When the session ends, it runs the same with `--caches --delay 5`, so the
+session's own worktree is no longer in use when offcut looks.
+
+`--only auto` removes two kinds of thing:
 
 - unused build caches, and
 - finished worktrees: ones with commits in them that are now merged, or that a
@@ -97,6 +107,12 @@ The job removes two kinds of thing, then saves a report of everything else to
 
 A worktree that is only idle is left for you. Run `offcut`, read the list, then
 `offcut apply`.
+
+Runs never make a turn wait. Each one writes to
+`~/.local/state/offcut/apply.log`. Only one `apply` runs at a time; another
+waits up to 60 s, then skips. Set `OFFCUT=off` to turn the mod off for one
+session. The mod needs Claude Code 2.1.278 or later with
+`CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`.
 
 ## Providers
 

@@ -1,9 +1,11 @@
 mod cache;
+mod claude_mod;
 mod decide;
+mod detach;
 mod gather;
+mod lock;
 mod manifest;
 mod provider;
-mod schedule;
 
 use clap::{Parser, Subcommand};
 use decide::{Verdict, decide};
@@ -58,11 +60,19 @@ enum Cmd {
         /// Remove only this kind of item.
         #[arg(long, value_enum)]
         only: Option<Only>,
+        /// Run in the background, in a process group of its own, and return at once.
+        /// Output goes to ~/.local/state/offcut/apply.log. Needs --yes.
+        #[arg(long, requires = "yes")]
+        detach: bool,
+        /// Wait this many seconds before looking.
+        #[arg(long, default_value_t = 0)]
+        delay: u64,
     },
-    /// Keep the machine clean with a scheduled job (macOS launchd).
-    Schedule {
+    /// Clean up as you go: a Claude Code mod that runs `apply` when a turn or session ends.
+    #[command(name = "mod")]
+    Mod {
         #[command(subcommand)]
-        action: ScheduleCmd,
+        action: ModCmd,
     },
     /// Put back worktrees that `apply` removed. With no path, list what can be restored.
     Restore {
@@ -72,13 +82,11 @@ enum Cmd {
 }
 
 #[derive(Subcommand)]
-enum ScheduleCmd {
-    /// Install the job: every 6 hours, remove unused caches and finished worktrees, save a report.
+enum ModCmd {
+    /// Write the mod to ~/.claude/skills/offcut.
     Install,
-    /// Remove the job.
+    /// Delete it.
     Remove,
-    /// Show whether the job is installed and when it last reported.
-    Status,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -446,15 +454,37 @@ fn main() -> ExitCode {
     let cmd = cli.cmd.unwrap_or(Cmd::Report);
     match &cmd {
         Cmd::Restore { paths } => return restore(paths),
-        Cmd::Schedule { action } => {
+        Cmd::Mod { action } => {
             return match action {
-                ScheduleCmd::Install => schedule::install(),
-                ScheduleCmd::Remove => schedule::remove(),
-                ScheduleCmd::Status => schedule::status(),
+                ModCmd::Install => claude_mod::install(),
+                ModCmd::Remove => claude_mod::remove(),
             };
+        }
+        Cmd::Apply { detach: true, .. } => return detach::spawn(),
+        Cmd::Apply { delay, .. } => {
+            if std::env::var_os(detach::CHILD).is_some() {
+                detach::header();
+            }
+            std::thread::sleep(std::time::Duration::from_secs(*delay));
         }
         _ => {}
     }
+    // Hold the lock across the scan too, so two runs never judge the same
+    // worktree at once.
+    let _lock = match &cmd {
+        Cmd::Apply { .. } => match lock::Lock::take() {
+            Ok(Some(l)) => Some(l),
+            Ok(None) => {
+                println!("another offcut apply is still running after 60 s; skipped");
+                return ExitCode::SUCCESS;
+            }
+            Err(e) => {
+                eprintln!("offcut: cannot take the apply lock: {e}");
+                return ExitCode::FAILURE;
+            }
+        },
+        _ => None,
+    };
     let repos = match repos(&cli.scan) {
         Ok(r) => r,
         // Caches are machine-wide, so `--caches` works outside a repo.
@@ -466,7 +496,7 @@ fn main() -> ExitCode {
     };
     let rows = rows(&cli.scan, &repos);
     match cmd {
-        Cmd::Apply { yes, only } => apply(&rows, yes, only),
+        Cmd::Apply { yes, only, .. } => apply(&rows, yes, only),
         _ => {
             print_report(&rows, cli.scan.json);
             ExitCode::SUCCESS
