@@ -1,0 +1,18 @@
+README.md
+  h_63f2916b00d585 100-101
+mod/hooks/register.ts
+  h_63f2916b00d585 5-6,56,90-94
+mod/tests/register.test.ts
+  h_63f2916b00d585 45,50,52-53
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "2b790ef733c21852569460b932e8e104c4e62ebe",
+  "prompts": {},
+  "humans": {
+    "h_63f2916b00d585": {
+      "author": "Jacob Martin <martinjaco@gmail.com>"
+    }
+  }
+}
