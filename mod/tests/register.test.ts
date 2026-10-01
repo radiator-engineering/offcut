@@ -42,13 +42,15 @@ function world(on: On, opts: Opts = {}) {
 }
 
 describe('when it cleans up', () => {
-  test('every finished turn starts a cleanup of the main repo', async ($, on) => {
+  test('every finished turn starts a cleanup; the first also clears caches', async ($, on) => {
     const w = world(on)
     await w.start($)
     await $.turn.complete(turn())
     expect(w.launched).toEqual([
-      { argv: ['/bin/offcut', 'apply', '--only', 'auto', '--yes', '--detach'], cwd: '/repo' },
+      { argv: ['/bin/offcut', '--caches', 'apply', '--only', 'auto', '--yes', '--detach'], cwd: '/repo' },
     ])
+    await $.turn.complete(turn())
+    expect(w.launched[1]?.argv).toEqual(['/bin/offcut', 'apply', '--only', 'auto', '--yes', '--detach'])
   })
 
   test("a subagent's finished turn starts one too", async ($, on) => {

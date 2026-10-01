@@ -97,7 +97,8 @@ subagent's, it runs this in the background, in the repo the session works in:
 offcut apply --only auto --yes --detach
 ```
 
-When the session ends, it runs the same with `--caches --delay 5`, so the
+At most every 10 minutes a turn's run adds `--caches`, so a long session
+clears caches too. When the session ends, it runs the same with `--caches --delay 5`, so the
 session's own worktree is no longer in use when offcut looks.
 
 `--only auto` removes two kinds of thing:

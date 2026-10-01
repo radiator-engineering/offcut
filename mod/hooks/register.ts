@@ -2,6 +2,8 @@ import type { Register } from 'claude-code'
 
 const TAG = 'offcut'
 const TIMEOUT_MS = 5_000
+/** Turn-end runs scan build caches at most this often; the scan is slow. */
+export const CACHE_EVERY_MS = 10 * 60_000
 
 const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
@@ -51,6 +53,7 @@ async function launch($: Host, t: Target | undefined, delay: number, caches: boo
 
 export const register: Register = on => {
   let target: Target | undefined
+  let lastCaches = 0
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -84,7 +87,11 @@ export const register: Register = on => {
   // worked in its own worktree has just finished with it.
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
-    await launch($, target, 0, false)
+    // A long session may never end, so its turns clear caches too, now and then.
+    const now = Date.now()
+    const caches = now - lastCaches >= CACHE_EVERY_MS
+    if (caches) lastCaches = now
+    await launch($, target, 0, caches)
     return result
   })
 
