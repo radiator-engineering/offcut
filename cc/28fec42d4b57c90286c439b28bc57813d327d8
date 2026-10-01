@@ -1,0 +1,75 @@
+Cargo.lock
+  s_4a15127410edf8::t_d7da264a3613b7 158-176,222
+Cargo.toml
+  s_8f75a68fefd987::t_5a6a6d8e3664b2 10
+README.md
+  s_bbca6749af64d5::t_b801e51e73d091 29,42-43,85,88-89,92-102,111-116
+docs/design.md
+  s_bbca6749af64d5::t_79f5fe8e422f8a 21,31,52-78,171-175,177
+mod/.claude-plugin/plugin.json
+  s_0ded5f8cda5a6b::t_33bf45de429b5b 1-6
+mod/hooks/hooks.json
+  s_a03cf3b11345b7::t_fe5f1f14acaf31 1-4
+mod/hooks/register.ts
+  s_0ded5f8cda5a6b::t_99994bad9f8ea5 1-95
+mod/tests/register.test.ts
+  s_0ded5f8cda5a6b::t_c0666267a2446f 1-115
+mod/tsconfig.json
+  s_bbca6749af64d5::t_4b6e46cdac952a 1-14
+src/claude_mod.rs
+  s_8f75a68fefd987::t_cb65cffea53768 1-2,4-6,8,10-12,16-20,23-24,27-44,48,54-62,64-68,70-74,76
+src/detach.rs
+  s_0ded5f8cda5a6b::t_1d586d00bf0637 1-87
+src/lock.rs
+  s_0ded5f8cda5a6b::t_b42395c76b3be6 1-124
+src/main.rs
+  s_0ded5f8cda5a6b::t_88a5924044e630 2,4,6,63-69,71-73,75,85-86,88,457,459-460,463-469,472-487,499
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "cc28fec42d4b57c90286c439b28bc57813d327d8",
+  "prompts": {},
+  "sessions": {
+    "s_0ded5f8cda5a6b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e18c9e49-6bc7-4f63-afa4-bc1b9d4bb3be",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Jacob Martin <martinjaco@gmail.com>"
+    },
+    "s_4a15127410edf8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b38cb5c4-6ca4-4c76-a008-c90c7ad7a1ec",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Jacob Martin <martinjaco@gmail.com>"
+    },
+    "s_8f75a68fefd987": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "77b7eed5-bb53-4931-9f5b-8c6e6e72fee2",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Jacob Martin <martinjaco@gmail.com>"
+    },
+    "s_a03cf3b11345b7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b7cca7ff-ee56-486f-98a0-ecd02b157403",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Jacob Martin <martinjaco@gmail.com>"
+    },
+    "s_bbca6749af64d5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "df235a51-21c1-4d4d-aa50-fbcecee9f3f3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Jacob Martin <martinjaco@gmail.com>"
+    }
+  }
+}
